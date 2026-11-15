@@ -99,18 +99,26 @@ function stageShot() {
     P.health = 82;
     playerCtl.setWeapon('vk7');
     // West mid lane, looking east through the Crossing passage: two Wardens in the open
-    // beyond it, a teammate pushing up the north side.
+    // beyond it, a teammate pushing up the north side, a third Warden already down.
     st.teleport(P, -14, 0, Math.PI / 2);
     st.teleport(foe(0), 5.5, -0.5, -Math.PI / 2);
     st.teleport(foe(1), 10, 0.5, -Math.PI / 2);
     st.teleport(mate(1), -8, -3.5, Math.PI / 2);
+    st.teleport(foe(4), 1.5, 3.4, -Math.PI / 2);
+    foe(4).alive = false;
+    st.state.scoreV = 3; st.state.scoreW = 2; st.state.round = 6;
+    st.state.history = ['vanguard', 'wardens', 'vanguard', 'vanguard', 'wardens'];
     hud.showBuy(false);
     hud.banner('', '', 1);
   } else if (shotName === 'buy') {
     P.money = 4350;
     P.loadout.primary = makeWeaponState('raptor');
+    P.loadout.current = 'primary';
+    playerCtl.setWeapon('raptor');
     st.setPhase('buy', 9);
     st.teleport(P, -23, 0.5, Math.PI / 2);
+    st.state.scoreV = 2; st.state.scoreW = 1; st.state.round = 4;
+    st.state.history = ['vanguard', 'wardens', 'vanguard'];
     hud.showBuy(true);
   } else if (shotName === 'mid') {
     st.setPhase('live', 64);
@@ -125,6 +133,8 @@ function stageShot() {
     st.teleport(foe(3), -6, 2, Math.PI / 2);
     st.teleport(mate(2), 8, -4.2, -Math.PI / 2);
     effects.smoke(-2, 0, 0, 3.4, 999, match.now);
+    st.state.scoreV = 2; st.state.scoreW = 2; st.state.round = 5;
+    st.state.history = ['wardens', 'vanguard', 'wardens', 'vanguard'];
     hud.showBuy(false);
     hud.banner('', '', 1);
   } else if (shotName === 'site') {
@@ -135,15 +145,34 @@ function stageShot() {
     playerCtl.setWeapon('vk7');
     // South-west edge of Foundry (A), sightline passing the furnace's south edge: the Charge
     // is planted center-site, a Warden crouches in to defuse it, a second covers from the
-    // east, a teammate holds the west line.
+    // east, a teammate holds the west line, entry smoke still hangs over the west door.
     st.teleport(P, 9, -13.5, Math.atan2(12, -1.5));
     st.teleport(foe(0), 21.8, -14.2, Math.atan2(-0.8, -0.8));
     foe(0).crouch = true;
     st.teleport(foe(1), 24, -13.5, Math.atan2(-3, -1.5));
     st.teleport(mate(1), 16, -11, Math.atan2(5, -4));
+    effects.smoke(15.5, 0, -10.5, 3.2, 999, match.now);
+    st.state.scoreV = 4; st.state.scoreW = 3; st.state.round = 8;
+    st.state.history = ['vanguard', 'vanguard', 'wardens', 'vanguard', 'wardens', 'vanguard', 'wardens'];
     hud.showBuy(false);
   }
   for (let i = 0; i < 3; i++) match.update(1 / 60);
+  // Killfeed lines for the staged scene. They fade after a few seconds and a slow renderer
+  // can take longer than that to hand the frame over, so staging re-issues them while the
+  // feed is empty — the screenshot catches a fresh pair whenever it lands.
+  const feed = shotName === 'cover'
+    ? () => { hud.killfeed('Ivo  ▸ Raptor-9 ▸  Cato'); hud.killfeed('YOU  ▸ VK-7 ⌖ ▸  Jett'); }
+    : shotName === 'site' ? () => hud.killfeed('Dove  ▸ VK-7 ▸  Grimm') : null;
+  if (feed) {
+    feed();
+    const iv = setInterval(() => { if (!document.querySelector('#killfeed .kf')) feed(); }, 800);
+    setTimeout(() => clearInterval(iv), 20000);
+  }
+  // One live shot per action scene, fired after the last update so its tracer and muzzle
+  // flash are still on screen for the render.
+  if (shotName === 'cover') st.stageFire(mate(1), 5.5, -0.5);
+  if (shotName === 'mid') st.stageFire(foe(2), 14, 0.5);
+  if (shotName === 'site') st.stageFire(foe(1), 9, -13.5);
   world.update(1 / 60);
   renderer.render(scene, camera);
   window.__shotReady = true;
