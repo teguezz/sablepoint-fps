@@ -34,6 +34,33 @@ function sitePaint(site, letter) {
   return m;
 }
 
+// A backlit yard sign: dark plate, pale title, team-warm accent line. Canvas-drawn like the
+// site paint, so the yard's lettering is the game's own art, not a borrowed font asset.
+function textSign(title, sub, w = 4.6) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 160;
+  const x = c.getContext('2d');
+  x.fillStyle = '#22252b';
+  x.fillRect(0, 0, 512, 160);
+  x.strokeStyle = '#e8905a';
+  x.lineWidth = 6;
+  x.strokeRect(8, 8, 496, 144);
+  x.textAlign = 'center';
+  x.fillStyle = '#f2ede4';
+  x.font = '700 62px system-ui, sans-serif';
+  x.fillText(title, 256, 82);
+  x.fillStyle = '#e8905a';
+  x.font = '700 32px system-ui, sans-serif';
+  x.fillText(sub, 256, 132);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, w * 160 / 512),
+    new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.38, roughness: 0.85 }),
+  );
+  return m;
+}
+
 export function createWorld(scene) {
   const tex = makeTextures();
   const group = new THREE.Group();
@@ -48,11 +75,16 @@ export function createWorld(scene) {
       uniforms: {
         top: { value: new THREE.Color(PALETTE.sky) },
         horizon: { value: new THREE.Color(PALETTE.horizon) },
+        sunDir: { value: new THREE.Vector3(-38, 34, -20).normalize() },
+        sunTint: { value: new THREE.Color(PALETTE.sun) },
       },
       vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: 'uniform vec3 top; uniform vec3 horizon; varying vec3 vP;'
-        + 'void main(){ float h = clamp(normalize(vP).y * 1.6, 0.0, 1.0);'
-        + ' gl_FragColor = vec4(mix(horizon, top, pow(h, 0.62)), 1.0); }',
+      fragmentShader: 'uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir; uniform vec3 sunTint; varying vec3 vP;'
+        + 'void main(){ vec3 d = normalize(vP); float h = clamp(d.y * 1.6, 0.0, 1.0);'
+        + ' vec3 col = mix(horizon, top, pow(h, 0.62));'
+        + ' float s = pow(max(dot(d, sunDir), 0.0), 22.0);'
+        + ' col += sunTint * (s * 0.55 + pow(max(dot(d, sunDir), 0.0), 350.0) * 0.9);'
+        + ' gl_FragColor = vec4(col, 1.0); }',
     }),
   );
   group.add(sky);
@@ -77,6 +109,9 @@ export function createWorld(scene) {
   const lampA = new THREE.PointLight(0xffd9a0, 18, 15, 1.8);
   lampA.position.set(0, 5.4, 0);
   scene.add(lampA);
+  const lampB = new THREE.PointLight(0xffd9a0, 18, 15, 1.8);
+  lampB.position.set(28, 5.4, 0);
+  scene.add(lampB);
 
   // Ground.
   const ground = new THREE.Mesh(
@@ -173,6 +208,20 @@ export function createWorld(scene) {
     m.position.set(x, h / 2, z);
     group.add(m);
   }
+  // Yard signage: the Foundry over site A's furnace face, the Depot over B's back wall, and
+  // a small board for the Crossing on its lamp pole — the places name themselves in play.
+  const signA = textSign('FOUNDRY', 'SITE A');
+  signA.position.set(18, 3.7, -16.8);
+  group.add(signA);
+  const signB = textSign('DEPOT', 'SITE B');
+  signB.position.set(21, 3.7, 19.4);
+  signB.rotation.y = Math.PI;
+  group.add(signB);
+  const signMid = textSign('CROSSING', 'MID', 2.3);
+  signMid.position.set(0, 3.3, -4.6);
+  signMid.material.side = THREE.DoubleSide;
+  group.add(signMid);
+
   const craneMat = new THREE.MeshStandardMaterial({ color: 0x54443a, roughness: 0.9 });
   const craneLegL = new THREE.Mesh(unitBox, craneMat);
   craneLegL.scale.set(0.6, 13, 0.6); craneLegL.position.set(-14, 6.5, -31);

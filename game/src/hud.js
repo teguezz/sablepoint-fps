@@ -12,7 +12,8 @@ export function createHud() {
     hpFill: $('hpfill'), hpNum: $('hpnum'), armor: $('armorstat'), money: $('money'),
     wepName: $('wepname'), ammoMag: $('ammomag'), ammoRes: $('ammores'),
     nades: $('grenades'), timer: $('timer'), scoreV: $('scorev'), scoreW: $('scorew'),
-    roundNo: $('roundno'), crosshair: $('crosshair'), hitmarker: $('hitmarker'),
+    roundNo: $('roundno'), aliveV: $('alivev'), aliveW: $('alivew'), history: $('history'),
+    crosshair: $('crosshair'), hitmarker: $('hitmarker'),
     killfeed: $('killfeed'), banner: $('banner'), bannerTitle: $('bannertitle'),
     bannerSub: $('bannersub'), vignette: $('vignette'), flash: $('flash'),
     dirhit: $('dirhit'), prompt: $('prompt'), promptLabel: $('promptlabel'),
@@ -22,6 +23,7 @@ export function createHud() {
     phase: $('phase'),
   };
   let hitT = null, bannerT = null, dirT = null;
+  let histSig = '', aliveSig = '';
 
   const api = {
     onBuyRequest: null,
@@ -47,6 +49,26 @@ export function createHud() {
       els.scoreV.textContent = String(s.scoreV);
       els.scoreW.textContent = String(s.scoreW);
       els.roundNo.textContent = `ROUND ${s.round}`;
+      // Alive pips under each score: filled for the standing, hollow for the fallen.
+      const aSig = `${s.aliveV ?? 5}|${s.aliveW ?? 5}`;
+      if (aSig !== aliveSig) {
+        aliveSig = aSig;
+        const pips = (n) => '●'.repeat(Math.max(0, n)) + '○'.repeat(Math.max(0, 5 - n));
+        els.aliveV.textContent = pips(s.aliveV ?? 5);
+        els.aliveW.textContent = pips(s.aliveW ?? 5);
+      }
+      // Round-history dots: one per finished round, ember for Vanguard, teal for Wardens.
+      const hist = s.history ?? [];
+      const hSig = hist.join(',');
+      if (hSig !== histSig) {
+        histSig = hSig;
+        els.history.replaceChildren();
+        for (const w of hist) {
+          const dot = document.createElement('i');
+          dot.className = w === 'vanguard' ? 'v' : 'w';
+          els.history.appendChild(dot);
+        }
+      }
       els.phase.textContent = s.phaseLabel ?? '';
       els.planted.style.display = s.planted ? 'block' : 'none';
       if (s.planted) els.planted.textContent = `⚠ CHARGE PLANTED — ${s.plantedSite}`;

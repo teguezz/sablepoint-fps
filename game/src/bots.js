@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { MAP } from './mapdata.js';
 import { moveCircle } from './collision.js';
 import { losClear } from './collision.js';
-import { buildCharacter } from './viewmodels.js';
+import { buildCharacter, fitGun } from './viewmodels.js';
 import { currentWeapon } from './weapons.js';
 
 // --- Waypoint graph (built once) ---
@@ -92,6 +92,7 @@ export function createBots(ctx) {
       aimErr: 0.4, burstLeft: 0, pauseUntil: 0, strafeDir: 0, strafeUntil: 0,
       holdPos: null, peekPos: null, peekUntil: 0, crouched: false,
       alertPos: null, alertUntil: 0, channel: null, thinkAt: Math.random() * 0.15,
+      smokeUsed: false, nadeAt: 0, flankSet: false, guardSet: false,
       stuckAt: 0, lastX: c.pos.x, lastZ: c.pos.z, walkPhase: 0, fallT: 0,
     };
   }
@@ -198,6 +199,19 @@ export function createBots(ctx) {
     c.yaw += d * Math.min(1, dt * rate);
   }
 
+  // Lob a grenade at a ground point: face it, then let the arsenal's throw physics carry
+  // it, with the throw's power matched to the range so a point-blank smoke stays close.
+  const _tgt = new THREE.Vector3();
+  function throwAt(c, kind, tx, tz, now) {
+    faceToward(c, Math.atan2(tx - c.pos.x, tz - c.pos.z), 1, 10);
+    _eye.set(c.pos.x, c.pos.y + 1.5, c.pos.z);
+    _tgt.set(tx, 1.1, tz);
+    _dir.copy(_tgt).sub(_eye).normalize();
+    const range = Math.hypot(tx - c.pos.x, tz - c.pos.z);
+    const power = Math.max(4, Math.min(15, range * 0.95));
+    return ctx.arsenal.throwGrenade(c, kind, _eye, _dir, now, power);
+  }
+
   function engage(c, dt, now) {
     const b = c.brain;
     const foe = b.seen;
@@ -274,15 +288,21 @@ export function createBots(ctx) {
   // by what the bot has seen or heard since.
   function act(c, dt, now, match) {
     const b = c.brain;
-    // A lost target is worth checking: walk to where it was last seen.
+    // A lost target is worth checking: walk to where it was last seen. A Warden with a frag
+    // and a fresh, mid-range fix on the enemy lobs the frag at that spot first.
     if (b.lastSeenPos && now - b.lastSeenAt < 4 && !b.seen) {
+      if (c.team === 'wardens' && c.loadout.grenades.frag > 0 && now > b.nadeAt) {
+        const dN = Math.hypot(b.lastSeenPos.x - c.pos.x, b.lastSeenPos.z - c.pos.z);
+        if (dN > 6 && dN < 16 && throwAt(c, 'frag', b.lastSeenPos.x, b.lastSeenPos.z, now)) b.nadeAt = now + 7;
+      }
       if (!b.target || Math.hypot(b.target.x - b.lastSeenPos.x, b.target.z - b.lastSeenPos.z) > 2) {
         pathTo(c, b.lastSeenPos.x, b.lastSeenPos.z);
       }
       if (moveAlong(c, dt, 3.4)) b.lastSeenPos = null;
       return;
     }
-    if (b.channel) { c.vel.x = 0; c.vel.z = 0; return; } // planting / defusing: rounds watches
+    if (b.channel) { c.vel.x = 0; c.vel.z = 0; c.crouch = true; return; } // planting / defusing: rounds watches
+    c.crouch = false;
     const site = match.targetSite ? MAP.sites[match.targetSite] : null;
 
     if (c.team === 'vanguard') {
@@ -296,6 +316,12 @@ export function createBots(ctx) {
         }
         if (moveAlong(c, dt, 3.6)) holdStance(c);
         return;
+      }
+      // Entry utility: the first attackers to close on the site smoke its heart, so the
+      // carrier crosses the last open ground behind a wall the Wardens cannot see through.
+      if (site && !insideSite(c.pos, site) && !b.smokeUsed && c.loadout.grenades.smoke > 0) {
+        const dS = Math.hypot(site.cx - c.pos.x, site.cz - c.pos.z);
+        if (dS < 13 && Math.random() < 0.03 && throwAt(c, 'smoke', site.cx, site.cz, now)) b.smokeUsed = true;
       }
       if (b.role === 'carrier') {
         if (site && insideSite(c.pos, site)) {
@@ -320,11 +346,20 @@ export function createBots(ctx) {
     } else {
       // Wardens.
       if (match.phase === 'planted') {
+        // Retake shape: the last Warden swings wide through the Crossing to hit the site
+        // from the far side while the rest come straight in; the defuser smokes the Charge
+        // first, so the Vanguard guards are shooting into a cloud.
+        if (!b.flankSet) {
+          b.flankSet = true;
+          if (c.id === 9 && site) pathTo(c, site.cx, site.cz, ['midGap']);
+        }
         if (site && insideSite(c.pos, site)) {
           const charge = match.chargePos;
           const d = Math.hypot(charge.x - c.pos.x, charge.z - c.pos.z);
           if (d > 1.1) { pathTo(c, charge.x, charge.z); moveAlong(c, dt, 4.2); }
-          else { b.channel = { kind: 'defuse', startedAt: now }; c.vel.x = 0; c.vel.z = 0; }
+          else if (!b.smokeUsed && c.loadout.grenades.smoke > 0 && throwAt(c, 'smoke', charge.x, charge.z, now)) {
+            b.smokeUsed = true;
+          } else { b.channel = { kind: 'defuse', startedAt: now }; c.vel.x = 0; c.vel.z = 0; }
         } else if (!b.target) pathTo(c, site ? site.cx : c.pos.x, site ? site.cz : c.pos.z);
         else moveAlong(c, dt, 4.2);
         return;
@@ -366,6 +401,9 @@ export function createBots(ctx) {
 
   function syncModel(c, model) {
     if (!model) return;
+    // The carried gun tracks the bot's current weapon, so a Kestrel reads longer than a P9.
+    const wid = c.loadout?.[c.loadout.current]?.id;
+    if (wid && model.gunKind !== wid) { model.gunKind = wid; fitGun(model, wid); }
     const g = model.group;
     g.position.set(c.pos.x, c.crouch ? -0.34 : 0, c.pos.z);
     g.rotation.set(0, c.yaw, 0);

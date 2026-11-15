@@ -148,7 +148,7 @@ export function createArsenal(ctx) {
     }
   }
 
-  function throwGrenade(c, kind, origin, dir, now) {
+  function throwGrenade(c, kind, origin, dir, now, power = 15) {
     if (!c.alive || c.loadout.grenades[kind] <= 0 || now < c.grenadeLockUntil) return false;
     c.loadout.grenades[kind] -= 1;
     c.grenadeLockUntil = now + 0.55;
@@ -157,7 +157,7 @@ export function createArsenal(ctx) {
     scene.add(mesh);
     projectiles.push({
       kind, mesh, owner: c,
-      vx: dir.x * 15, vy: dir.y * 15 + 3.2, vz: dir.z * 15,
+      vx: dir.x * power, vy: dir.y * power + 3.2, vz: dir.z * power,
       fuse: kind === 'flash' ? 1.5 : kind === 'smoke' ? 1.1 : 1.9,
       settled: 0,
     });

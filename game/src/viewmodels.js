@@ -93,17 +93,39 @@ export function buildCharacter(teamId) {
   legR.geometry = legL.geometry; legR.position.y = 0.8;
   const torso = part(B(0.46, 0.62, 0.26), cloth, 0, 1.11, 0, g);
   part(B(0.4, 0.4, 0.08), dark, 0, 1.14, 0.15, g); // vest plate
+  part(B(0.17, 0.07, 0.22), cloth, -0.3, 1.44, 0, g); // shoulder pads
+  part(B(0.17, 0.07, 0.22), cloth, 0.3, 1.44, 0, g);
   const head = part(B(0.26, 0.28, 0.26), skin, 0, 1.62, 0, g);
   part(B(0.3, 0.12, 0.3), cloth, 0, 1.79, 0, g); // helmet
+  // A lit team band around the helmet: the side reads even in silhouette and at range.
+  const band = new THREE.MeshStandardMaterial({ color: team.color, emissive: team.color, emissiveIntensity: 0.5, roughness: 0.6 });
+  part(B(0.31, 0.045, 0.31), band, 0, 1.735, 0, g);
   part(B(0.28, 0.07, 0.05), dark, 0, 1.64, 0.14, g); // visor
   const armR = part(B(0.11, 0.5, 0.11), cloth, 0.3, 1.28, 0.12, g);
   armR.rotation.x = -1.15;
   const armL = part(B(0.11, 0.45, 0.11), cloth, -0.28, 1.26, 0.14, g);
   armL.rotation.x = -1.3; armL.rotation.z = -0.35;
-  const gun = part(B(0.07, 0.13, 0.62), gunmetal, 0.16, 1.32, 0.34, g);
-  part(B(0.03, 0.03, 0.2), steel, 0.16, 1.36, 0.72, g);
+  // The gun rides in its own group so fitGun can reshape it per weapon class.
+  const gun = new THREE.Group();
+  gun.position.set(0.16, 1.32, 0.3);
+  g.add(gun);
+  part(B(0.07, 0.13, 0.62), gunmetal, 0, 0, 0.04, gun);
+  part(B(0.03, 0.03, 0.2), steel, 0, 0.04, 0.42, gun);
+  part(B(0.04, 0.14, 0.05), polymer, 0, -0.12, -0.02, gun);
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  return { group: g, legL, legR, armR, armL, torso, head };
+  return { group: g, legL, legR, armR, armL, torso, head, gun, gunKind: null };
+}
+
+// Reshape a character's gun for the weapon it currently holds: a sidearm sits short in the
+// hands, the Kestrel stretches long, the Scatter-7 runs bulky. Scale only — the shared
+// materials and the hit zones never change.
+const GUN_SHAPES = {
+  p9: [0.8, 0.8, 0.42], hunter: [0.9, 0.9, 0.58], raptor: [1, 1, 0.85],
+  vk7: [1, 1, 1], scatter: [1.3, 1.15, 1.05], kestrel: [0.95, 0.95, 1.4],
+};
+export function fitGun(model, id) {
+  const s = GUN_SHAPES[id] ?? GUN_SHAPES.vk7;
+  model.gun.scale.set(s[0], s[1], s[2]);
 }
 
 // The charge: a slab of shaped explosive with a keypad and a light that blinks faster as the

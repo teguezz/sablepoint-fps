@@ -50,7 +50,7 @@ export function createMatch(deps) {
   // --- Match state ---
   const S = {
     started: false, phase: 'idle', phaseT: 0, round: 0,
-    scoreV: 0, scoreW: 0, lossStreak: { vanguard: 0, wardens: 0 },
+    scoreV: 0, scoreW: 0, history: [], lossStreak: { vanguard: 0, wardens: 0 },
     targetSite: 'A', carrier: null,
     charge: { state: 'carried', pos: new THREE.Vector3(), site: null },
     winner: null, reason: '', beepAt: 0, matchWinner: null,
@@ -172,9 +172,46 @@ export function createMatch(deps) {
   }
   hud.onBuyRequest = (key) => buy(player, key);
 
+  // --- Bot shopping: bots spend their own money in the buy phase, like the player does ---
+  // Each bot has a taste: the designated Warden marksman saves for the Kestrel, the Charge
+  // carrier favours the fast Raptor, everyone else works down the rifle list. Armour comes
+  // after a primary, grenades after armour — attackers smoke and flash their entry, defenders
+  // keep a frag for a heard contact. A bot too poor for the cheapest primary either forces the
+  // Hunter .45 (when it can also stay useful next round) or saves untouched, pistol-round style.
+  const BOT_PRIMARY = {
+    carrier: ['raptor', 'vk7', 'scatter'],
+    marksman: ['kestrel', 'vk7', 'raptor'],
+    rifle: ['vk7', 'raptor', 'scatter'],
+  };
+  function botBuy(c, role) {
+    const L = c.loadout;
+    const afford = (id) => c.money >= WEAPONS[id].price;
+    const give = (id) => {
+      const def = WEAPONS[id];
+      c.money -= def.price;
+      L[def.slot] = makeWeaponState(id);
+      if (def.slot === 'primary') L.current = 'primary';
+    };
+    if (!L.primary) {
+      const prefs = BOT_PRIMARY[role] ?? BOT_PRIMARY.rifle;
+      const pick = prefs.find((id) => afford(id));
+      if (pick) give(pick);
+      else if (c.money >= 1000 && L.sidearm?.id !== 'hunter') give('hunter'); // force-buy
+    }
+    if (L.primary && !L.armor && c.money >= ARMOR.price + 300) { L.armor = true; c.money -= ARMOR.price; }
+    if (L.primary && L.sidearm?.id !== 'hunter' && c.money >= WEAPONS.hunter.price + 900) give('hunter');
+    const nades = c.team === 'vanguard' ? ['smoke', 'frag'] : ['frag', 'smoke'];
+    for (const kind of nades) {
+      if (L.grenades[kind] < GRENADE_CAPS[kind] && c.money >= GRENADES[kind].price + 200) {
+        L.grenades[kind] += 1;
+        c.money -= GRENADES[kind].price;
+      }
+    }
+  }
+
   // --- Round flow ---
   function startMatch() {
-    S.scoreV = 0; S.scoreW = 0; S.round = 0;
+    S.scoreV = 0; S.scoreW = 0; S.round = 0; S.history = [];
     S.lossStreak = { vanguard: 0, wardens: 0 };
     for (const c of combatants) {
       c.money = ECON.start; c.kills = 0; c.deaths = 0;
@@ -219,11 +256,14 @@ export function createMatch(deps) {
     let rifleIdx = 0;
     for (const c of attackers) {
       if (c.isPlayer) continue;
-      if (c === S.carrier) plans.push({ c, role: 'carrier', site: S.targetSite });
-      else plans.push({ c, role: 'rifle', site: S.targetSite, via: viaFor[S.targetSite][rifleIdx++ % 3] });
+      if (c === S.carrier) { botBuy(c, 'carrier'); plans.push({ c, role: 'carrier', site: S.targetSite }); }
+      else { botBuy(c, 'rifle'); plans.push({ c, role: 'rifle', site: S.targetSite, via: viaFor[S.targetSite][rifleIdx++ % 3] }); }
     }
     const holds = [MAP.holds.A[0], MAP.holds.A[1], MAP.holds.B[0], MAP.holds.B[1], MAP.holds.mid[0]];
-    defenders.forEach((c, i) => plans.push({ c, role: 'hold', hold: holds[i % holds.length] }));
+    defenders.forEach((c, i) => {
+      botBuy(c, i === 2 ? 'marksman' : 'rifle');
+      plans.push({ c, role: 'hold', hold: holds[i % holds.length] });
+    });
     bots.planRound(plans);
     S.phase = 'buy';
     S.phaseT = MATCH.buyTime;
@@ -240,6 +280,7 @@ export function createMatch(deps) {
     S.winner = winner;
     S.reason = reason;
     if (winner === 'vanguard') S.scoreV += 1; else S.scoreW += 1;
+    S.history.push(winner);
     const loser = winner === 'vanguard' ? 'wardens' : 'vanguard';
     S.lossStreak[winner] = 0;
     S.lossStreak[loser] += 1;
@@ -521,6 +562,7 @@ export function createMatch(deps) {
       weaponName: def ? def.name : '', mag: w ? w.mag : null, reserve: w ? w.reserve : null,
       grenadesText: `FRAG ${g.frag} · SMOKE ${g.smoke} · FLASH ${g.flash}`,
       timeLeft: S.phaseT, scoreV: S.scoreV, scoreW: S.scoreW, round: Math.max(1, S.round),
+      aliveV: aliveOf('vanguard').length, aliveW: aliveOf('wardens').length, history: S.history,
       phase: S.phase, now,
       phaseLabel: S.phase === 'buy' ? 'BUY PHASE — B for shop' : S.phase === 'live' ? (S.carrier === player ? '⚡ YOU HAVE THE CHARGE' : '') : S.phase === 'over' ? '' : '',
       planted: S.phase === 'planted', plantedSite: S.charge.site === 'A' ? 'FOUNDRY' : 'DEPOT',
@@ -558,6 +600,15 @@ export function createMatch(deps) {
       teleport(c, x, z, yaw) { c.pos.set(x, 0, z); c.yaw = yaw; c.vel.set(0, 0, 0); },
       setPhase(phase, t) { S.phase = phase; S.phaseT = t; },
       plantAt(siteId) { S.charge.pos.set(MAP.sites[siteId].cx, 0, MAP.sites[siteId].cz); plantCharge(siteId, null); },
+      // Fire one staged shot from c toward a ground point, so a screenshot can catch the
+      // tracer and muzzle flash of a fight already in progress.
+      stageFire(c, tx, tz) {
+        c.yaw = Math.atan2(tx - c.pos.x, tz - c.pos.z);
+        _eye.set(c.pos.x, c.pos.y + 1.55, c.pos.z);
+        _dir.set(tx - c.pos.x, 1.25 - _eye.y, tz - c.pos.z).normalize();
+        _muzzle.set(c.pos.x + Math.sin(c.yaw) * 0.55, c.pos.y + 1.34, c.pos.z + Math.cos(c.yaw) * 0.55);
+        arsenal.fire(c, _eye, _dir, _muzzle, now);
+      },
     },
   };
 }
